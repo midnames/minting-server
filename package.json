@@ -1,0 +1,54 @@
+{
+  "name": "midnight-token-minting-server",
+  "version": "1.0.0",
+  "description": "Express.js server for minting tokens on Midnight Network",
+  "type": "module",
+  "main": "server.ts",
+  "scripts": {
+    "dev": "tsx --watch server.ts",
+    "start": "tsx server.ts",
+    "build": "tsc",
+    "lint": "eslint . --ext .ts,.js",
+    "compact": "compactc src/token.compact managed/token"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/compact-runtime": "^0.8.1",
+    "@midnight-ntwrk/ledger": "latest",
+    "@midnight-ntwrk/midnight-js-contracts": "latest",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "latest",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "latest",
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "latest",
+    "@midnight-ntwrk/midnight-js-network-id": "latest",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "latest",
+    "@midnight-ntwrk/midnight-js-types": "latest",
+    "@midnight-ntwrk/wallet": "latest",
+    "@midnight-ntwrk/wallet-api": "latest",
+    "@midnight-ntwrk/wallet-sdk-address-format": "latest",
+    "@midnight-ntwrk/zswap": "latest",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "pino": "^8.15.0",
+    "pino-pretty": "^10.2.0",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.17",
+    "@types/cors": "^2.8.13",
+    "@types/node": "^20.5.0",
+    "typescript": "^5.1.6",
+    "tsx": "^4.20.5",
+    "eslint": "^8.47.0",
+    "@typescript-eslint/eslint-plugin": "^6.4.0",
+    "@typescript-eslint/parser": "^6.4.0"
+  },
+  "keywords": [
+    "midnight-network",
+    "blockchain",
+    "token",
+    "minting",
+    "express",
+    "server"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
