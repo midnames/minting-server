@@ -305,7 +305,7 @@ async function addNewHumanForAddress(
   targetAddress: string
 ): Promise<{ transactionId: string }> {
   logger.info(`Adding new human for address: ${targetAddress}`);
-
+  /*
   const bech32Address = MidnightBech32m.parse(targetAddress);
   let targetPublicKey: Uint8Array;
 
@@ -324,7 +324,16 @@ async function addNewHumanForAddress(
   } else {
     throw new TypeError(`Unsupported address type: ${bech32Address.type}`);
   }
-
+*/
+  // Convert the address string (hex or base64) to Uint8Array
+  let targetPublicKey: Uint8Array;
+  if (/^[0-9a-fA-F]+$/.test(targetAddress)) {
+    targetPublicKey = Uint8Array.from(Buffer.from(targetAddress, "hex"));
+  } else if (/^[A-Za-z0-9+/=]+$/.test(targetAddress)) {
+    targetPublicKey = Uint8Array.from(Buffer.from(targetAddress, "base64"));
+  } else {
+    throw new Error("Unsupported address format for conversion to Uint8Array");
+  }
   const result = await contract.callTx.addNewHuman(targetPublicKey);
   logger.info(`Add new human transaction completed. Tx: ${result.public.txId}`);
 
@@ -387,7 +396,7 @@ class RebelsServer {
           };
           return res.status(400).json(payload);
         }
-
+        /*
         if (!validateAddress(address)) {
           const payload: MintResponse = {
             success: false,
@@ -397,7 +406,7 @@ class RebelsServer {
           };
           return res.status(400).json(payload);
         }
-
+*/
         if (!this.rebelsContract) {
           const payload: MintResponse = {
             success: false,
