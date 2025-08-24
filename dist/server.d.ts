@@ -1,7 +1,7 @@
-declare class TokenMintingServer {
+declare class RebelsServer {
     private app;
     private wallet;
-    private contract;
+    private rebelsContract;
     private isInitialized;
     private config;
     constructor();
@@ -11,6 +11,6 @@ declare class TokenMintingServer {
     start(): Promise<void>;
     shutdown(): Promise<void>;
 }
-declare const server: TokenMintingServer;
+declare const server: RebelsServer;
 export default server;
 //# sourceMappingURL=server.d.ts.map

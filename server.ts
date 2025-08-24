@@ -3,6 +3,9 @@ import cors from "cors";
 import { type Wallet } from "@midnight-ntwrk/wallet-api";
 import {
   type CoinInfo,
+  decodeCoinPublicKey,
+  decodeContractAddress,
+  encodeCoinPublicKey,
   nativeToken,
   Transaction,
   type TransactionId,
@@ -38,8 +41,8 @@ import {
 } from "@midnight-ntwrk/wallet-sdk-address-format";
 
 // Adjust these paths based on your actual project structure
-import * as Token from "./src/index.js";
-import { witnesses } from "./src/witnesses.js";
+import { RebelsContract } from "./src/index.js";
+import { rebelsWitnesses } from "./src/witnesses.js";
 
 import * as Rx from "rxjs";
 import * as path from "node:path";
@@ -88,7 +91,9 @@ function toErrorPayload(err: unknown): { success: false; error: ErrorInfo } {
   if (typeof err === "object" && err !== null) {
     const anyObj = err as any;
     const name =
-      anyObj.name ?? (anyObj.constructor && anyObj.constructor.name) ?? "NonErrorThrowable";
+      anyObj.name ??
+      (anyObj.constructor && anyObj.constructor.name) ??
+      "NonErrorThrowable";
     base.error.name = name;
     base.error.message = anyObj.message ?? JSON.stringify(anyObj);
     Object.assign(base.error, anyObj);
@@ -138,8 +143,9 @@ class TestnetConfig implements Config {
  * ============== */
 const GENESIS_MINT_WALLET_SEED =
   "557beb4d4bd5c88948712fd375b20f44ed9f38ade5e6ee8c27ece84d26de1640";
-const TOKEN_CONTRACT_ADDRESS =
-  "02004f20274ec45d2ba4d80a27cfd13b745ece742c033e6c9247731a16a43a76d594";
+const REBELS_CONTRACT_ADDRESS =
+  process.env.REBELS_CONTRACT_ADDRESS ||
+  "02005fd1fcbaa280015e66782d7159f54874c7af1146320b4f674024c170f484e8d1";
 const PORT = process.env.PORT || 3000;
 
 // __dirname equivalent for ESM
@@ -147,8 +153,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Contract configuration
-const contractConfig = {
-  zkConfigPath: path.resolve(__dirname, "src", "managed", "token"),
+const rebelsContractConfig = {
+  zkConfigPath: path.resolve(__dirname, "src", "managed", "rebels"),
 };
 
 /* =============
@@ -168,7 +174,7 @@ const logger: Logger = pino(
 );
 
 // Instantiate contract class (used for types; concrete found instance created later)
-const tokenContractInstance = new Token.Contract(witnesses);
+const rebelsContractInstance = new RebelsContract(rebelsWitnesses);
 
 /* =================
  * Helper functions
@@ -256,26 +262,27 @@ const configureProviders = async (
   wallet: Wallet & Resource,
   config: Config
 ) => {
-  const walletAndMidnightProvider = await createWalletAndMidnightProvider(wallet);
-  const tokenContractInstance = new Token.Contract(witnesses);
+  const walletAndMidnightProvider = await createWalletAndMidnightProvider(
+    wallet
+  );
 
   return {
-    providers: {
-      privateStateProvider: levelPrivateStateProvider<"tokenPrivateState">({
-        privateStateStoreName: "token-private-state",
+    rebelsProviders: {
+      privateStateProvider: levelPrivateStateProvider<"rebelsPrivateState">({
+        privateStateStoreName: "rebels-private-state",
       }),
       publicDataProvider: indexerPublicDataProvider(
         config.indexer,
         config.indexerWS
       ),
       zkConfigProvider: new NodeZkConfigProvider<
-        keyof typeof tokenContractInstance.impureCircuits
-      >(contractConfig.zkConfigPath),
+        keyof typeof rebelsContractInstance.impureCircuits
+      >(rebelsContractConfig.zkConfigPath),
       proofProvider: httpClientProofProvider(config.proofServer),
       walletProvider: walletAndMidnightProvider,
       midnightProvider: walletAndMidnightProvider,
     } satisfies ContractProviders,
-    tokenContractInstance,
+    rebelsContractInstance,
   };
 };
 
@@ -292,38 +299,34 @@ function validateAddress(address: string): boolean {
   }
 }
 
-// Mint function for server
-async function mintTokensForAddress(
-  contract: FoundContract<typeof tokenContractInstance>,
+// Add new human function for server
+async function addNewHumanForAddress(
+  contract: FoundContract<typeof rebelsContractInstance>,
   targetAddress: string
 ): Promise<{ transactionId: string }> {
-  logger.info(`Minting tokens for address: ${targetAddress}`);
+  logger.info(`Adding new human for address: ${targetAddress}`);
 
   const bech32Address = MidnightBech32m.parse(targetAddress);
-  let targetCoinPublicKey: { bytes: Uint8Array };
+  let targetPublicKey: Uint8Array;
 
   if (bech32Address.type === "shield-addr") {
     const shieldedAddress = ShieldedAddress.codec.decode(
       getZswapNetworkId(),
       bech32Address
     );
-    targetCoinPublicKey = {
-      bytes: new Uint8Array(shieldedAddress.coinPublicKey.data),
-    };
+    targetPublicKey = new Uint8Array(shieldedAddress.coinPublicKey.data);
   } else if (bech32Address.type === "shield-cpk") {
     const coinPublicKey = ShieldedCoinPublicKey.codec.decode(
       getZswapNetworkId(),
       bech32Address
     );
-    targetCoinPublicKey = {
-      bytes: new Uint8Array(coinPublicKey.data),
-    };
+    targetPublicKey = new Uint8Array(coinPublicKey.data);
   } else {
     throw new TypeError(`Unsupported address type: ${bech32Address.type}`);
   }
 
-  const result = await contract.callTx.mint_for(targetCoinPublicKey);
-  logger.info(`Mint transaction completed. Tx: ${result.public.txId}`);
+  const result = await contract.callTx.addNewHuman(targetPublicKey);
+  logger.info(`Add new human transaction completed. Tx: ${result.public.txId}`);
 
   return { transactionId: result.public.txId };
 }
@@ -331,10 +334,10 @@ async function mintTokensForAddress(
 /* ================
  * Server class
  * ================ */
-class TokenMintingServer {
+class RebelsServer {
   private app: express.Application;
   private wallet: (Wallet & Resource) | null = null;
-  private contract: FoundContract<any> | null = null;
+  private rebelsContract: FoundContract<any> | null = null;
   private isInitialized = false;
   private config: Config;
 
@@ -395,20 +398,23 @@ class TokenMintingServer {
           return res.status(400).json(payload);
         }
 
-        if (!this.contract) {
+        if (!this.rebelsContract) {
           const payload: MintResponse = {
             success: false,
-            message: "Contract not initialized",
+            message: "Rebels contract not initialized",
           };
           return res.status(500).json(payload);
         }
 
-        const result = await mintTokensForAddress(this.contract, address);
+        const result = await addNewHumanForAddress(
+          this.rebelsContract,
+          address
+        );
 
         const payload: MintResponse = {
           success: true,
           transactionId: result.transactionId,
-          message: "Tokens minted successfully",
+          message: "Human added successfully",
           address,
         };
         res.json(payload);
@@ -467,19 +473,23 @@ class TokenMintingServer {
       );
 
       // Configure providers
-      const { providers, tokenContractInstance } = await configureProviders(
-        this.wallet,
-        this.config
-      );
+      const { rebelsProviders, rebelsContractInstance } =
+        await configureProviders(this.wallet, this.config);
 
-      // Connect to contract
-      logger.info(`Connecting to token contract at: ${TOKEN_CONTRACT_ADDRESS}`);
-      this.contract = await findDeployedContract(providers, {
-        contractAddress: TOKEN_CONTRACT_ADDRESS,
-        contract: tokenContractInstance,
-        privateStateId: "tokenPrivateState",
-        initialPrivateState: {},
-      });
+      // Connect to rebels contract
+      if (REBELS_CONTRACT_ADDRESS) {
+        logger.info(
+          `Connecting to rebels contract at: ${REBELS_CONTRACT_ADDRESS}`
+        );
+        this.rebelsContract = await findDeployedContract(rebelsProviders, {
+          contractAddress: REBELS_CONTRACT_ADDRESS,
+          contract: rebelsContractInstance,
+          privateStateId: "rebelsPrivateState",
+          initialPrivateState: { secretKey: new Uint8Array(32) },
+        });
+      } else {
+        throw new Error("REBELS_CONTRACT_ADDRESS must be set");
+      }
 
       this.isInitialized = true;
       logger.info("Server initialization completed successfully");
@@ -494,10 +504,12 @@ class TokenMintingServer {
 
     return new Promise<void>((resolve) => {
       this.app.listen(PORT, () => {
-        logger.info(`🪙 Token Minting Server running on port ${PORT}`);
+        logger.info(`🪙 Rebels Human Registry Server running on port ${PORT}`);
         logger.info(`📊 Health check: http://localhost:${PORT}/health`);
         logger.info(`📈 Status: http://localhost:${PORT}/status`);
-        logger.info(`🚀 Mint endpoint: POST http://localhost:${PORT}/mint`);
+        logger.info(
+          `🚀 Add Human endpoint: POST http://localhost:${PORT}/mint`
+        );
         logger.info(`🧪 Test: POST/GET http://localhost:${PORT}/test`);
         resolve();
       });
@@ -516,7 +528,7 @@ class TokenMintingServer {
 /* =========================
  * Graceful shutdown + boot
  * ========================= */
-const server = new TokenMintingServer();
+const server = new RebelsServer();
 
 process.on("SIGINT", async () => {
   logger.info("Received SIGINT, shutting down gracefully");

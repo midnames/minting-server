@@ -1,0 +1,203 @@
+pragma language_version 0.17;
+
+import CompactStandardLibrary;
+
+export struct Post {
+  author: Bytes<32>,
+  content: Opaque<"string">,
+  plusVotes: Uint<64>,
+  minusVotes: Uint<64>
+}
+
+export ledger authorizedUsers: Set<Bytes<32>>;
+export ledger userAliases: Map<Bytes<32>, Opaque<"string">>;
+export ledger userReputation: Map<Bytes<32>, Uint<64>>;
+export ledger postCounter: Counter;
+export ledger posts: Map<Uint<64>, Post>;
+export ledger plusVoters: Map<Uint<64>, Set<Bytes<32>>>;
+export ledger minusVoters: Map<Uint<64>, Set<Bytes<32>>>;
+export ledger flaggedPosts: Map<Uint<64>, Set<Bytes<32>>>;
+export ledger prohibitedMaterialAuthority: Bytes<32>;
+export ledger removalVoteThreshold: Uint<8>;
+
+export ledger journalists: Set<Bytes<32>>;
+export ledger humans: Set<Bytes<32>>;
+export ledger referrals: Map<Bytes<32>, Uint<2>>;
+
+export sealed ledger HUMAN_AUTHORITY: ZswapCoinPublicKey;
+
+export circuit addNewHuman(pk: Bytes<32>): [] {
+  assert(!humans.member(disclose(pk)), "Already an human");
+  assert(ownPublicKey() == HUMAN_AUTHORITY, "NOT THE HUMAN AUTHORITY");
+  humans.insert(disclose(pk));
+}
+
+export circuit suggestNewUser(pk: Bytes<32>) : [] {
+  assert(!journalists.member(disclose(pk)), "Suggested user is already a member");
+  assert(humans.member(disclose(pk)), "Not a verified human");
+
+
+  const pubkey = disclose(publicKey(localSecretKey()));
+  
+  const q = referrals.lookup(pubkey); 
+  assert(q < 2, "No more referals for you");
+
+  referrals.insert(pubkey, (q + 1) as Uint<2>);
+  journalists.insert(disclose(pk));
+  referrals.insert(disclose(pk), 0);
+}
+
+witness localSecretKey(): Bytes<32>;
+
+export circuit publicKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>([pad(32, "journalist"), sk]);
+}
+
+constructor(initialSecretKeys: Vector<3, Bytes<32>>, aliases: Vector<3, Opaque<"string">>, authoritySecretKey: Bytes<32>, threshold: Uint<8>) {
+  // Derive public keys from secret keys using the same function as the circuits
+  const user1PublicKey = disclose(publicKey(initialSecretKeys[0]));
+  const user2PublicKey = disclose(publicKey(initialSecretKeys[1]));
+  const user3PublicKey = disclose(publicKey(initialSecretKeys[2]));
+  const authorityPublicKey = disclose(publicKey(authoritySecretKey));
+  
+  journalists.insert(user1PublicKey);
+  userAliases.insert(user1PublicKey, disclose(aliases[0]));
+  userReputation.insert(user1PublicKey, 1000);
+  referrals.insert(user1PublicKey, 0);
+  
+  journalists.insert(user2PublicKey);
+  userAliases.insert(user2PublicKey, disclose(aliases[1]));
+  userReputation.insert(user2PublicKey, 1000);
+  referrals.insert(user2PublicKey, 0);
+  
+  journalists.insert(user3PublicKey);
+  userAliases.insert(user3PublicKey, disclose(aliases[2]));
+  userReputation.insert(user3PublicKey, 1000);
+  referrals.insert(user3PublicKey, 0);
+  
+  prohibitedMaterialAuthority = authorityPublicKey;
+  removalVoteThreshold = disclose(threshold);
+
+  HUMAN_AUTHORITY = ownPublicKey();
+}
+
+export circuit publishPost(content: Opaque<"string">): Uint<64> {
+  const authorKey = disclose(publicKey(localSecretKey()));
+  assert(journalists.member(authorKey), "User not authorized to post");
+  
+  postCounter.increment(1);
+  const postId = postCounter.read();
+  
+  const newPost = Post {
+    author: authorKey,
+    content: disclose(content),
+    plusVotes: 0,
+    minusVotes: 0
+  };
+  
+  posts.insert(disclose(postId), newPost);
+  plusVoters.insert(disclose(postId), default<Set<Bytes<32>>>);
+  minusVoters.insert(disclose(postId), default<Set<Bytes<32>>>);
+  flaggedPosts.insert(disclose(postId), default<Set<Bytes<32>>>);
+  
+  return postId;
+}
+
+export circuit votePlus(postId: Uint<64>): [] {
+  const voterKey = disclose(publicKey(localSecretKey()));
+  assert(authorizedUsers.member(voterKey), "User not authorized to vote");
+  assert(posts.member(disclose(postId)), "Post does not exist");
+  
+  assert(!plusVoters.lookup(disclose(postId)).member(voterKey), "User already voted plus on this post");
+  assert(!minusVoters.lookup(disclose(postId)).member(voterKey), "User already voted minus on this post");
+
+  assert(posts.lookup(disclose(postId)).author != voterKey, "User can't vote themself");
+  
+  plusVoters.lookup(disclose(postId)).insert(voterKey);
+  
+  const currentPost = posts.lookup(disclose(postId));
+  const updatedPost = Post {
+    author: currentPost.author,
+    content: currentPost.content,
+    plusVotes: (currentPost.plusVotes + 1) as Uint<64>,
+    minusVotes: currentPost.minusVotes
+  };
+  posts.insert(disclose(postId), updatedPost);
+  
+  const currentReputation = userReputation.member(currentPost.author) ? userReputation.lookup(currentPost.author) : 1000;
+  userReputation.insert(currentPost.author, (currentReputation + 10) as Uint<64>);
+}
+
+export circuit voteMinus(postId: Uint<64>): [] {
+  const voterKey = disclose(publicKey(localSecretKey()));
+  assert(authorizedUsers.member(voterKey), "User not authorized to vote");
+  assert(posts.member(disclose(postId)), "Post does not exist");
+  
+  assert(!plusVoters.lookup(disclose(postId)).member(voterKey), "User already voted plus on this post");
+  assert(!minusVoters.lookup(disclose(postId)).member(voterKey), "User already voted minus on this post");
+  
+  assert(posts.lookup(disclose(postId)).author != voterKey, "User can't vote themself");
+
+  minusVoters.lookup(disclose(postId)).insert(voterKey);
+  
+  const currentPost = posts.lookup(disclose(postId));
+  const updatedPost = Post {
+    author: currentPost.author,
+    content: currentPost.content,
+    plusVotes: currentPost.plusVotes,
+    minusVotes: (currentPost.minusVotes + 1) as Uint<64>
+  };
+  posts.insert(disclose(postId), updatedPost);
+  
+  const currentReputation = userReputation.member(currentPost.author) ? userReputation.lookup(currentPost.author) : 1000;
+  const newReputation = currentReputation > 10 ? currentReputation - 10 : 0;
+  userReputation.insert(currentPost.author, newReputation);
+}
+
+export circuit flagPost(postId: Uint<64>): [] {
+  const flaggerKey = disclose(publicKey(localSecretKey()));
+  assert(authorizedUsers.member(flaggerKey), "User not authorized to flag posts");
+  assert(posts.member(disclose(postId)), "Post does not exist");
+  
+  assert(!flaggedPosts.lookup(disclose(postId)).member(flaggerKey), "User already flagged this post");
+  
+  flaggedPosts.lookup(disclose(postId)).insert(flaggerKey);
+}
+
+export circuit removeIllegalContent(postId: Uint<64>): [] {
+  const authorityKey = disclose(publicKey(localSecretKey()));
+  assert(authorityKey == prohibitedMaterialAuthority, "Only prohibited material authority can remove posts");
+  assert(posts.member(disclose(postId)), "Post does not exist");
+  
+  posts.remove(disclose(postId));
+  plusVoters.remove(disclose(postId));
+  minusVoters.remove(disclose(postId));
+  flaggedPosts.remove(disclose(postId));
+}
+
+
+// This can be done reading the ledger.
+
+export circuit getPost(postId: Uint<64>): Maybe<Post> {
+  if (posts.member(disclose(postId))) {
+    return some<Post>(posts.lookup(disclose(postId)));
+  } else {
+    return none<Post>();
+  }
+}
+
+export circuit getReputation(userKey: Bytes<32>): Uint<64> {
+  if (userReputation.member(disclose(userKey))) {
+    return userReputation.lookup(disclose(userKey));
+  } else {
+    return 1000;
+  }
+}
+
+export circuit getUserAlias(userKey: Bytes<32>): Maybe<Opaque<"string">> {
+  if (userAliases.member(disclose(userKey))) {
+    return some<Opaque<"string">>(userAliases.lookup(disclose(userKey)));
+  } else {
+    return none<Opaque<"string">>();
+  }
+}

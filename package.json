@@ -9,7 +9,7 @@
     "start": "tsx ./server.ts",
     "build": "tsc",
     "lint": "eslint . --ext .ts,.js",
-    "compact": "compactc src/token.compact src/managed/token"
+    "compact": "compact compile src/rebels.compact src/managed/rebels"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-runtime": "^0.8.1",
