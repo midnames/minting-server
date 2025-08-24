@@ -451,8 +451,8 @@ class TokenMintingServer {
         params: req.params,
       });
 
-      console.log(req.body);
-      res.json(req.body);
+      console.log(req.body.content.payload);
+      res.json(req.body.content.payload);
     });
   }
 
