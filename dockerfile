@@ -5,15 +5,17 @@ WORKDIR /app
 # Copy package files
 COPY package.json package-lock.json* ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (including dev dependencies for build)
+RUN npm ci
 
 # Copy application files
 COPY . .
 
-# Make sure managed directory is included
-COPY managed/ ./managed/
-COPY src/ ./src/
+# Build the application
+RUN npm run build
+
+# Copy managed directory to dist (tsc doesn't copy .cjs files)
+RUN cp -r src/managed dist/src/
 
 # Expose port
 EXPOSE 3000

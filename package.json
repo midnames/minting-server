@@ -6,10 +6,10 @@
   "main": "server.ts",
   "scripts": {
     "dev": "tsx --watch server.ts",
-    "start": "tsx server.ts",
+    "start": "tsx ./server.ts",
     "build": "tsc",
     "lint": "eslint . --ext .ts,.js",
-    "compact": "compactc src/token.compact managed/token"
+    "compact": "compactc src/token.compact src/managed/token"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-runtime": "^0.8.1",

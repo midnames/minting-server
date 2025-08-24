@@ -1,5 +1,5 @@
-import express from 'express';
-import cors from 'cors';
+import express from "express";
+import cors from "cors";
 import { type Wallet } from "@midnight-ntwrk/wallet-api";
 import {
   type CoinInfo,
@@ -38,21 +38,72 @@ import {
 } from "@midnight-ntwrk/wallet-sdk-address-format";
 
 // Adjust these paths based on your actual project structure
-// If your token contract files are in the same directory:
 import * as Token from "./src/index.js";
 import { witnesses } from "./src/witnesses.js";
 
-// OR if they're in a different location, adjust accordingly:
-// import * as Token from "../src/index.js";
-// import { witnesses } from "../src/witnesses.js";
-
 import * as Rx from "rxjs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { type Logger } from "pino";
 import pinoPretty from "pino-pretty";
 import pino from "pino";
 
-// Types
+/* =================================================================================
+ * Error helpers (ensures error "type" / name, message, stack, code, etc. are shown)
+ * ================================================================================= */
+interface ErrorInfo {
+  name: string;
+  message: string;
+  stack?: string;
+  code?: string | number;
+  cause?: unknown;
+  // allow library-specific props
+  [k: string]: unknown;
+}
+
+function toErrorPayload(err: unknown): { success: false; error: ErrorInfo } {
+  const base: { success: false; error: ErrorInfo } = {
+    success: false,
+    error: { name: "UnknownError", message: "Unknown error occurred" },
+  };
+
+  if (err instanceof Error) {
+    const anyErr = err as any;
+    base.error.name = err.name || "Error";
+    base.error.message = err.message || base.error.message;
+    if (err.stack) base.error.stack = err.stack;
+    if ("code" in anyErr) base.error.code = anyErr.code;
+    if ("cause" in anyErr && anyErr.cause) {
+      base.error.cause =
+        anyErr.cause instanceof Error
+          ? { name: anyErr.cause.name, message: anyErr.cause.message }
+          : anyErr.cause;
+    }
+    for (const k of Object.keys(anyErr)) {
+      if (!(k in base.error)) base.error[k] = anyErr[k];
+    }
+    return base;
+  }
+
+  if (typeof err === "object" && err !== null) {
+    const anyObj = err as any;
+    const name =
+      anyObj.name ?? (anyObj.constructor && anyObj.constructor.name) ?? "NonErrorThrowable";
+    base.error.name = name;
+    base.error.message = anyObj.message ?? JSON.stringify(anyObj);
+    Object.assign(base.error, anyObj);
+    return base;
+  }
+
+  // primitive
+  base.error.name = typeof err;
+  base.error.message = String(err);
+  return base;
+}
+
+/* ======================
+ * Types & Configuration
+ * ====================== */
 interface Config {
   readonly indexer: string;
   readonly indexerWS: string;
@@ -67,11 +118,11 @@ interface MintRequest {
 interface MintResponse {
   success: boolean;
   transactionId?: string;
-  message: string;
+  message?: string;
   address?: string;
+  error?: ErrorInfo;
 }
 
-// Configuration
 class TestnetConfig implements Config {
   indexer = "https://indexer.testnet-02.midnight.network/api/v1/graphql";
   indexerWS = "wss://indexer.testnet-02.midnight.network/api/v1/graphql/ws";
@@ -82,21 +133,32 @@ class TestnetConfig implements Config {
   }
 }
 
-// Constants
-const GENESIS_MINT_WALLET_SEED = "557beb4d4bd5c88948712fd375b20f44ed9f38ade5e6ee8c27ece84d26de1638";
-const TOKEN_CONTRACT_ADDRESS = "02004f20274ec45d2ba4d80a27cfd13b745ece742c033e6c9247731a16a43a76d594";
+/* ==============
+ * Constants
+ * ============== */
+const GENESIS_MINT_WALLET_SEED =
+  "557beb4d4bd5c88948712fd375b20f44ed9f38ade5e6ee8c27ece84d26de1640";
+const TOKEN_CONTRACT_ADDRESS =
+  "02004f20274ec45d2ba4d80a27cfd13b745ece742c033e6c9247731a16a43a76d594";
 const PORT = process.env.PORT || 3000;
+
+// __dirname equivalent for ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Contract configuration
 const contractConfig = {
-  zkConfigPath: path.resolve(import.meta.dirname, "managed", "token"),
+  zkConfigPath: path.resolve(__dirname, "src", "managed", "token"),
 };
 
-// Logger setup
+/* =============
+ * Logger setup
+ * ============= */
 const logger: Logger = pino(
   {
     level: "info",
     depthLimit: 20,
+    serializers: { err: pino.stdSerializers.err },
   },
   pinoPretty({
     colorize: true,
@@ -105,9 +167,12 @@ const logger: Logger = pino(
   })
 );
 
+// Instantiate contract class (used for types; concrete found instance created later)
 const tokenContractInstance = new Token.Contract(witnesses);
 
-// Helper functions (reused from original script)
+/* =================
+ * Helper functions
+ * ================= */
 const createWalletAndMidnightProvider = async (
   wallet: Wallet
 ): Promise<WalletProvider & MidnightProvider> => {
@@ -153,9 +218,7 @@ const waitForFunds = (wallet: Wallet) =>
           `Backend lag: ${sourceGap}, wallet lag: ${applyGap}, transactions=${state.transactionHistory.length}`
         );
       }),
-      Rx.filter((state) => {
-        return state.syncProgress?.synced === true;
-      }),
+      Rx.filter((state) => state.syncProgress?.synced === true),
       Rx.map((s) => s.balances[nativeToken()] ?? 0n),
       Rx.filter((balance) => balance > 0n)
     )
@@ -195,21 +258,24 @@ const configureProviders = async (
 ) => {
   const walletAndMidnightProvider = await createWalletAndMidnightProvider(wallet);
   const tokenContractInstance = new Token.Contract(witnesses);
-  
+
   return {
     providers: {
       privateStateProvider: levelPrivateStateProvider<"tokenPrivateState">({
         privateStateStoreName: "token-private-state",
       }),
-      publicDataProvider: indexerPublicDataProvider(config.indexer, config.indexerWS),
-      zkConfigProvider: new NodeZkConfigProvider<keyof typeof tokenContractInstance.impureCircuits>(
-        contractConfig.zkConfigPath
+      publicDataProvider: indexerPublicDataProvider(
+        config.indexer,
+        config.indexerWS
       ),
+      zkConfigProvider: new NodeZkConfigProvider<
+        keyof typeof tokenContractInstance.impureCircuits
+      >(contractConfig.zkConfigPath),
       proofProvider: httpClientProofProvider(config.proofServer),
       walletProvider: walletAndMidnightProvider,
       midnightProvider: walletAndMidnightProvider,
-    },
-    tokenContractInstance
+    } satisfies ContractProviders,
+    tokenContractInstance,
   };
 };
 
@@ -217,7 +283,10 @@ const configureProviders = async (
 function validateAddress(address: string): boolean {
   try {
     const bech32Address = MidnightBech32m.parse(address);
-    return bech32Address.type === "shield-addr" || bech32Address.type === "shield-cpk";
+    return (
+      bech32Address.type === "shield-addr" ||
+      bech32Address.type === "shield-cpk"
+    );
   } catch {
     return false;
   }
@@ -250,16 +319,18 @@ async function mintTokensForAddress(
       bytes: new Uint8Array(coinPublicKey.data),
     };
   } else {
-    throw new Error(`Unsupported address type: ${bech32Address.type}`);
+    throw new TypeError(`Unsupported address type: ${bech32Address.type}`);
   }
 
   const result = await contract.callTx.mint_for(targetCoinPublicKey);
   logger.info(`Mint transaction completed. Tx: ${result.public.txId}`);
-  
+
   return { transactionId: result.public.txId };
 }
 
-// Server class
+/* ================
+ * Server class
+ * ================ */
 class TokenMintingServer {
   private app: express.Application;
   private wallet: (Wallet & Resource) | null = null;
@@ -277,110 +348,141 @@ class TokenMintingServer {
   private setupMiddleware() {
     this.app.use(cors());
     this.app.use(express.json());
-    this.app.use((req, res, next) => {
+    this.app.use((req, _res, next) => {
       logger.info(`${req.method} ${req.path} - ${req.ip}`);
       next();
     });
   }
 
   private setupRoutes() {
-    // Health check endpoint
-    this.app.get('/health', (req, res) => {
-      res.json({ 
-        status: 'healthy', 
+    // Health check
+    this.app.get("/health", (_req, res) => {
+      res.json({
+        status: "healthy",
         initialized: this.isInitialized,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     });
 
     // Mint endpoint
-    this.app.post('/mint', async (req, res) => {
+    this.app.post("/mint", async (req, res) => {
       try {
         if (!this.isInitialized) {
-          return res.status(503).json({
+          const payload: MintResponse = {
             success: false,
-            message: 'Server is still initializing. Please try again later.'
-          } as MintResponse);
+            message: "Server is still initializing. Please try again later.",
+          };
+          return res.status(503).json(payload);
         }
 
         const { address } = req.body as MintRequest;
 
         if (!address) {
-          return res.status(400).json({
+          const payload: MintResponse = {
             success: false,
-            message: 'Address is required in request body'
-          } as MintResponse);
+            message: "Address is required in request body",
+          };
+          return res.status(400).json(payload);
         }
 
         if (!validateAddress(address)) {
-          return res.status(400).json({
+          const payload: MintResponse = {
             success: false,
-            message: 'Invalid address format. Expected shield-addr or shield-cpk address.',
-            address
-          } as MintResponse);
+            message:
+              "Invalid address format. Expected shield-addr or shield-cpk address.",
+            address,
+          };
+          return res.status(400).json(payload);
         }
 
         if (!this.contract) {
-          return res.status(500).json({
+          const payload: MintResponse = {
             success: false,
-            message: 'Contract not initialized'
-          } as MintResponse);
+            message: "Contract not initialized",
+          };
+          return res.status(500).json(payload);
         }
 
         const result = await mintTokensForAddress(this.contract, address);
 
-        res.json({
+        const payload: MintResponse = {
           success: true,
           transactionId: result.transactionId,
-          message: 'Tokens minted successfully',
-          address
-        } as MintResponse);
-
+          message: "Tokens minted successfully",
+          address,
+        };
+        res.json(payload);
       } catch (error) {
-        logger.error('Mint operation failed:', error);
-        res.status(500).json({
-          success: false,
-          message: error instanceof Error ? error.message : 'Unknown error occurred'
-        } as MintResponse);
+        logger.error({ err: error }, "Mint operation failed");
+        const payload = toErrorPayload(error);
+        res.status(500).json(payload);
       }
     });
 
     // Status endpoint
-    this.app.get('/status', async (req, res) => {
+    this.app.get("/status", async (_req, res) => {
       try {
         if (!this.wallet || !this.isInitialized) {
-          return res.json({
-            initialized: false,
-            wallet: null
-          });
+          return res.json({ initialized: false, wallet: null });
         }
-
         const state = await Rx.firstValueFrom(this.wallet.state());
         res.json({
           initialized: this.isInitialized,
           wallet: {
             address: state.address,
-            balance: state.balances[nativeToken()]?.toString() || '0',
+            balance: state.balances[nativeToken()]?.toString() || "0",
             synced: state.syncProgress?.synced || false,
-            transactionCount: state.transactionHistory.length
-          }
+            transactionCount: state.transactionHistory.length,
+          },
         });
       } catch (error) {
-        logger.error('Status check failed:', error);
-        res.status(500).json({ error: 'Failed to get wallet status' });
+        logger.error({ err: error }, "Status check failed");
+        res.status(500).json(toErrorPayload(error));
       }
+    });
+
+    // Test echo endpoint
+    this.app.all("/test", (req, res) => {
+      logger.info("Test endpoint called", {
+        method: req.method,
+        headers: req.headers,
+        body: req.body,
+        query: req.query,
+        params: req.params,
+      });
+
+      res.json({
+        echo: {
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body: req.body,
+          query: req.query,
+          params: req.params,
+          timestamp: new Date().toISOString(),
+          ip: req.ip || (req.socket && req.socket.remoteAddress),
+        },
+        message:
+          "This is the test endpoint - your request has been echoed back",
+      });
     });
   }
 
   async initialize() {
     try {
-      logger.info('Initializing token minting server...');
+      logger.info("Initializing token minting server...");
 
       // Build wallet
-      this.wallet = await buildWalletAndWaitForFunds(this.config, GENESIS_MINT_WALLET_SEED);
+      this.wallet = await buildWalletAndWaitForFunds(
+        this.config,
+        GENESIS_MINT_WALLET_SEED
+      );
 
       // Configure providers
-      const { providers, tokenContractInstance } = await configureProviders(this.wallet, this.config);
+      const { providers, tokenContractInstance } = await configureProviders(
+        this.wallet,
+        this.config
+      );
 
       // Connect to contract
       logger.info(`Connecting to token contract at: ${TOKEN_CONTRACT_ADDRESS}`);
@@ -392,55 +494,60 @@ class TokenMintingServer {
       });
 
       this.isInitialized = true;
-      logger.info('Server initialization completed successfully');
+      logger.info("Server initialization completed successfully");
     } catch (error) {
-      logger.error('Server initialization failed:', error);
+      logger.error({ err: error }, "Initialization failure");
       throw error;
     }
   }
 
   async start() {
     await this.initialize();
-    
+
     return new Promise<void>((resolve) => {
       this.app.listen(PORT, () => {
         logger.info(`🪙 Token Minting Server running on port ${PORT}`);
         logger.info(`📊 Health check: http://localhost:${PORT}/health`);
         logger.info(`📈 Status: http://localhost:${PORT}/status`);
         logger.info(`🚀 Mint endpoint: POST http://localhost:${PORT}/mint`);
+        logger.info(`🧪 Test: POST/GET http://localhost:${PORT}/test`);
         resolve();
       });
     });
   }
 
   async shutdown() {
-    logger.info('Shutting down server...');
+    logger.info("Shutting down server...");
     if (this.wallet) {
       await this.wallet.close();
-      logger.info('Wallet closed');
+      logger.info("Wallet closed");
     }
   }
 }
 
-// Graceful shutdown handling
+/* =========================
+ * Graceful shutdown + boot
+ * ========================= */
 const server = new TokenMintingServer();
 
-process.on('SIGINT', async () => {
-  logger.info('Received SIGINT, shutting down gracefully');
+process.on("SIGINT", async () => {
+  logger.info("Received SIGINT, shutting down gracefully");
   await server.shutdown();
   process.exit(0);
 });
 
-process.on('SIGTERM', async () => {
-  logger.info('Received SIGTERM, shutting down gracefully');
+process.on("SIGTERM", async () => {
+  logger.info("Received SIGTERM, shutting down gracefully");
   await server.shutdown();
   process.exit(0);
 });
 
-// Start server
+// Start server when executed directly
 if (import.meta.url === `file://${process.argv[1]}`) {
   server.start().catch((error) => {
-    logger.error('Failed to start server:', error);
+    logger.error({ err: error }, "Failed to start server");
+    // Optional: print a structured payload too
+    logger.error(toErrorPayload(error), "Startup error payload");
     process.exit(1);
   });
 }
