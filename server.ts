@@ -451,20 +451,8 @@ class TokenMintingServer {
         params: req.params,
       });
 
-      res.json({
-        echo: {
-          method: req.method,
-          url: req.url,
-          headers: req.headers,
-          body: req.body,
-          query: req.query,
-          params: req.params,
-          timestamp: new Date().toISOString(),
-          ip: req.ip || (req.socket && req.socket.remoteAddress),
-        },
-        message:
-          "This is the test endpoint - your request has been echoed back",
-      });
+      console.log(req.body);
+      res.json(req.body);
     });
   }
 
