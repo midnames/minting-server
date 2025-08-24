@@ -313,6 +313,7 @@ async function addNewHumanForAddress(
     const shieldedAddress = ShieldedAddress.codec.decode(
       getZswapNetworkId(),
       bech32Address
+
     );
     targetPublicKey = new Uint8Array(shieldedAddress.coinPublicKey.data);
   } else if (bech32Address.type === "shield-cpk") {
@@ -326,15 +327,17 @@ async function addNewHumanForAddress(
   }
 */
   // Convert the address string (hex or base64) to Uint8Array
-  let targetPublicKey: Uint8Array;
+  /*   let targetPublicKey: Uint8Array;
   if (/^[0-9a-fA-F]+$/.test(targetAddress)) {
     targetPublicKey = Uint8Array.from(Buffer.from(targetAddress, "hex"));
   } else if (/^[A-Za-z0-9+/=]+$/.test(targetAddress)) {
     targetPublicKey = Uint8Array.from(Buffer.from(targetAddress, "base64"));
   } else {
     throw new Error("Unsupported address format for conversion to Uint8Array");
-  }
-  const result = await contract.callTx.addNewHuman(targetPublicKey);
+  } */
+
+  let t = encodeCoinPublicKey(targetAddress);
+  const result = await contract.callTx.addNewHuman(t);
   logger.info(`Add new human transaction completed. Tx: ${result.public.txId}`);
 
   return { transactionId: result.public.txId };
